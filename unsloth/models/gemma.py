@@ -236,19 +236,19 @@ class GemmaFixedRotaryEmbedding(torch.nn.Module):
 
         # The difference is we do division explicity instead of t * (1/x) ie we do t/x.
         freq_exponents = (2.0 / self.dim) * (
-            torch.arange(self.dim // 2, dtype = torch.int64, device = "cpu").float()
+            torch.arange(self.dim // 2, dtype=torch.int64, device=device).float()
         )
         timescale = self.base**freq_exponents
-        positions = torch.arange(self.current_rope_size, device = "cpu", dtype = torch.int64).float()
+        positions = torch.arange(self.current_rope_size, device=device, dtype=torch.int64).float()
         radians_new = positions[..., None] / timescale[None, None, :]
         radians_new = radians_new.squeeze(0)
 
-        emb = torch.cat((radians_new, radians_new), dim = -1)
+        emb = torch.cat((radians_new, radians_new), dim=-1)
         # We must do RoPE in float32!
-        cos = emb.cos().to(device = "cuda:0", non_blocking = True)#, dtype = dtype)
-        sin = emb.sin().to(device = "cuda:0", non_blocking = True)#, dtype = dtype)
-        self.register_buffer("cos_cached", cos, persistent = False)
-        self.register_buffer("sin_cached", sin, persistent = False)
+        cos = emb.cos().to(device=device)
+        sin = emb.sin().to(device=device)
+        self.register_buffer("cos_cached", cos, persistent=False)
+        self.register_buffer("sin_cached", sin, persistent=False)
     pass
 
     def forward(self, x, position_ids=None, seq_len=None):
@@ -270,7 +270,7 @@ class GemmaFixedRotaryEmbedding(torch.nn.Module):
         if seq_len <= self.current_rope_size: return
         # Iteratively grow by increments of 8192
         self.current_rope_size = math.ceil(seq_len / 8192) * 8192
-        self._set_cos_sin_cache(self.current_rope_size, device = "cuda:0", dtype = x.dtype)
+        self._set_cos_sin_cache(self.current_rope_size, device = x.device, dtype = x.dtype)
     pass
 pass
 

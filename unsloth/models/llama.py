@@ -283,7 +283,7 @@ def fast_swiglu_inference(self, X, temp_gate = None, temp_up = None):
     # up   = self.up_proj(X)
     bsz, _, hd = X.shape
     # mlp_size = self.config.intermediate_size
-    # temp = torch.empty((2, bsz, 1, mlp_size), dtype = X.dtype, device = "cuda:0")
+    # temp = torch.empty((2, bsz, 1, mlp_size), dtype = X.dtype, device = X.device)
 
     gate = fast_linear_forward(self.gate_proj, X, out = temp_gate)
     up   = fast_linear_forward(self.  up_proj, X, out = temp_up)
@@ -916,22 +916,20 @@ def LlamaModel_fast_forward_inference(
     position_ids,
     attention_mask = None,
 ):
+    device = input_ids.device
+    out_weight = torch.empty_like(self.model.layers[0].input_layernorm.weight, dtype = torch.float32, device = device)
     input_ids = input_ids[:,:self.max_seq_length]
-    bsz, q_len = input_ids.shape
-    hd = self.config.hidden_size
-    mlp_size = self.config.intermediate_size
-
-    X = self.model.embed_tokens(input_ids)
-    X = X.to(self.config.torch_dtype)
-    bsz, q_len, hd = X.shape
-    assert(q_len == 1)
+    hidden_states = self.model.embed_tokens(input_ids)
+    hidden_states = hidden_states.to(self.config.torch_dtype)
+    bsz, q_len, hd = hidden_states.shape
     
     # Get saved buffers to reduce memory movement
-    residual = torch.empty((bsz, q_len, hd), dtype = torch.float32, device = "cuda:0")
-    _XX = torch.empty((2, bsz, q_len, hd), dtype = torch.float32, device = "cuda:0")
+    residual = torch.empty((bsz, q_len, hd), dtype = torch.float32, device = device)
+    _XX = torch.empty((2, bsz, q_len, hd), dtype = torch.float32, device = device)
     XX, XX2 = _XX[0], _XX[1]
-    variance = torch.empty((bsz, q_len, 1), dtype = torch.float32, device = "cuda:0")
-    temp_mlp = torch.empty((2, bsz, 1, mlp_size), dtype = X.dtype, device = "cuda:0")
+    variance = torch.empty((bsz, q_len, 1), dtype = torch.float32, device = device)
+    mlp_size = self.model.layers[0].mlp.gate_proj.weight.shape[0]
+    temp_mlp = torch.empty((2, bsz, 1, mlp_size), dtype = hidden_states.dtype, device = device)
     temp_gate, temp_up = temp_mlp[0], temp_mlp[1]
 
     seq_len = past_key_values[0][0].shape[-2]
@@ -1233,15 +1231,15 @@ class LlamaRotaryEmbedding(torch.nn.Module):
         # in FP32. They are applied (multiplied) in FP32 as well.
         self.current_rope_size = seq_len
         inv_freq = 1.0 / (
-            self.base ** (torch.arange(0, self.dim, 2, dtype=torch.int64, device="cpu").float() / self.dim)
+            self.base ** (torch.arange(0, self.dim, 2, dtype=torch.int64, device=device).float() / self.dim)
         )
-        t = torch.arange(self.current_rope_size, device="cpu", dtype=torch.int64).float()
+        t = torch.arange(self.current_rope_size, device=device, dtype=torch.int64).float()
 
         freqs = torch.outer(t, inv_freq)
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
-        self.register_buffer("cos_cached", emb.cos().to(dtype=dtype, device=device, non_blocking=True), persistent=False)
-        self.register_buffer("sin_cached", emb.sin().to(dtype=dtype, device=device, non_blocking=True), persistent=False)
+        self.register_buffer("cos_cached", emb.cos().to(dtype=dtype), persistent=False)
+        self.register_buffer("sin_cached", emb.sin().to(dtype=dtype), persistent=False)
     pass
 
     def forward(self, x, position_ids=None, seq_len=None):
@@ -1283,16 +1281,16 @@ class LlamaLinearScalingRotaryEmbedding(LlamaRotaryEmbedding):
     def _set_cos_sin_cache(self, seq_len, device, dtype):
         self.current_rope_size = seq_len
         inv_freq = 1.0 / (
-            self.base ** (torch.arange(0, self.dim, 2, dtype=torch.int64, device="cpu").float() / self.dim)
+            self.base ** (torch.arange(0, self.dim, 2, dtype=torch.int64, device=device).float() / self.dim)
         )
-        t = torch.arange(self.current_rope_size, device="cpu", dtype=torch.int64).float()
+        t = torch.arange(self.current_rope_size, device=device, dtype=torch.int64).float()
         t = t / self.scaling_factor
 
         freqs = torch.outer(t, inv_freq)
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
-        self.register_buffer("cos_cached", emb.cos().to(dtype=dtype, device=device, non_blocking=True), persistent=False)
-        self.register_buffer("sin_cached", emb.sin().to(dtype=dtype, device=device, non_blocking=True), persistent=False)
+        self.register_buffer("cos_cached", emb.cos().to(dtype=dtype), persistent=False)
+        self.register_buffer("sin_cached", emb.sin().to(dtype=dtype), persistent=False)
     pass
 pass
 
@@ -1321,7 +1319,7 @@ class LlamaExtendedRotaryEmbedding(torch.nn.Module):
 
         # Normal Llama-3 RoPE
         inv_freq = 1.0 / (
-            self.base ** (torch.arange(0, self.dim, 2, dtype=torch.int64, device="cpu").float() / self.dim)
+            self.base ** (torch.arange(0, self.dim, 2, dtype=torch.int64, device=device).float() / self.dim)
         )
         inv_freq = self.apply_scaling(inv_freq)
         self.register_buffer("inv_freq", inv_freq, persistent = False)
@@ -1340,8 +1338,8 @@ class LlamaExtendedRotaryEmbedding(torch.nn.Module):
         freqs = torch.outer(t, self.inv_freq)
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
-        self.register_buffer("cos_cached", emb.cos().to(dtype=dtype, device=device, non_blocking=True), persistent=False)
-        self.register_buffer("sin_cached", emb.sin().to(dtype=dtype, device=device, non_blocking=True), persistent=False)
+        self.register_buffer("cos_cached", emb.cos().to(dtype=dtype), persistent=False)
+        self.register_buffer("sin_cached", emb.sin().to(dtype=dtype), persistent=False)
     pass
 
     # From https://github.com/meta-llama/llama-models/blob/main/models/llama3_1/api/model.py#L41
