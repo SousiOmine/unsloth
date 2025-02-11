@@ -636,9 +636,11 @@ def LlamaModel_fast_forward(
 
     # Embed positions
     if inputs_embeds is None:
+        # Move input_ids to the same device as the model
+        input_ids = input_ids.to(self.embed_tokens.weight.device)
         inputs_embeds = self.embed_tokens(input_ids)
-
-    # inputs_embeds = inputs_embeds.to(self.config.torch_dtype)
+    else:
+        inputs_embeds = inputs_embeds.to(self.config.torch_dtype)
     torch_dtype = __DTYPE_MAP.get(self.config.torch_dtype, None)
     if torch_dtype is not None:
         inputs_embeds = inputs_embeds.to(torch_dtype)
