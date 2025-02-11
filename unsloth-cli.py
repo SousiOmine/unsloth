@@ -115,6 +115,35 @@ def run(args):
         seed=args.seed,
         output_dir=args.output_dir,
         report_to=args.report_to,
+        # マルチGPU対応の設定を追加
+        deepspeed={
+            "zero_optimization": {
+                "stage": 2,
+                "offload_optimizer": {
+                    "device": "cpu",
+                    "pin_memory": True
+                },
+                "allgather_partitions": True,
+                "allgather_bucket_size": 2e8,
+                "reduce_scatter": True,
+                "reduce_bucket_size": 2e8,
+                "overlap_comm": True,
+                "contiguous_gradients": True
+            },
+            "fp16": {
+                "enabled": not is_bfloat16_supported(),
+                "loss_scale": 0,
+                "loss_scale_window": 1000,
+                "initial_scale_power": 16,
+                "hysteresis": 2,
+                "min_loss_scale": 1
+            },
+            "bf16": {
+                "enabled": is_bfloat16_supported()
+            },
+            "zero_allow_untested_optimizer": True
+        },
+        ddp_find_unused_parameters=False,
     )
 
     # Initialize trainer
